@@ -122,6 +122,50 @@ def _link_value(link, semantic_key):
     return link.other_attrs.get(semantic_key, 0)
 
 
+def _sort_key(value):
+    if pd.isna(value):
+        return (1, "")
+    try:
+        return (0, float(value))
+    except (TypeError, ValueError):
+        return (0, str(value))
+
+
+def _node_sort_key(node):
+    return (
+        _sort_key(_node_value(node, node_id_field)),
+        _sort_key(_node_value(node, "zone_id")),
+    )
+
+
+def _link_sort_key(link):
+    return (
+        _sort_key(_link_value(link, from_node_id_field)),
+        _sort_key(_link_value(link, to_node_id_field)),
+    )
+
+
+def _sort_dataframe_for_csv(df, columns):
+    sort_columns = [column for column in columns if column in df.columns]
+    if not sort_columns:
+        return df
+
+    sort_frame = df.copy()
+    helper_columns = []
+    for column in sort_columns:
+        helper_column = f"__sort_{column}"
+        helper_columns.append(helper_column)
+        numeric_values = pd.to_numeric(sort_frame[column], errors="coerce")
+        sort_frame[helper_column] = (
+            numeric_values
+            if numeric_values.notna().all()
+            else sort_frame[column].astype(str)
+        )
+
+    sorted_frame = sort_frame.sort_values(by=helper_columns, kind="mergesort").drop(columns=helper_columns)
+    return sorted_frame.reset_index(drop=True)
+
+
 def linestring_to_points(feature, line):
     return {feature: line.coords}
 
@@ -517,7 +561,7 @@ def _outputNode(network, output_folder):
 
     node_header = list(dtalite_node_mapping.values())
     writer.writerow(node_header)
-    for node_id, node in network.node_dict.items():
+    for node in sorted(network.node_dict.values(), key=_node_sort_key):
         line = [_node_value(node, semantic_key) for semantic_key in dtalite_node_mapping]
 
         writer.writerow(line)
@@ -543,7 +587,7 @@ def _outputLink(network, output_folder, time_period, link_filename=None):
     link_header.extend(other_link_header)
     writer.writerow(link_header)
 
-    for link_id, link in network.link_dict.items():
+    for link in sorted(network.link_dict.values(), key=_link_sort_key):
         line = [_link_value(link, semantic_key) for semantic_key in dtalite_base_link_mapping]
 
         other_link_att_values = [link.other_attrs[field] for field in other_link_header]
@@ -610,8 +654,10 @@ def district_id_map(net_dir, time_period, link_filename=None, jurisdiction_dir=N
         node_district_id_dict = dict(zip(link_net[from_node_id_field], link_net[district_id_field]))
         # node_district_id_dict_2 = dict(zip(link_net.to_node_id, link_net.district_id))
         node_net[district_id_field] = node_net.apply(lambda x: node_district_id_dict.setdefault(x[node_id_field], -1), axis=1)
+        node_net = _sort_dataframe_for_csv(node_net, [node_id_field, "zone_id"])
         node_net.to_csv(os.path.join(net_dir, node_file_name), index=False)
 
+    link_net = _sort_dataframe_for_csv(link_net, [from_node_id_field, to_node_id_field])
     link_net.to_csv(os.path.join(net_dir, link_filename), index=False)
 
     print('District ids assigned successfully.')
@@ -675,7 +721,7 @@ def cap_adjustment(net_dir, time_period, link_filename=None):
 
     if data_seg_list:
         df_bd_test = pd.concat(data_seg_list)
-        df_bd_test = df_bd_test.sort_values(by=link_id_field)
+        df_bd_test = _sort_dataframe_for_csv(df_bd_test, [from_node_id_field, to_node_id_field])
         df_bd_test.to_csv(os.path.join(net_dir, link_filename), index=False)
 
     print('Link capacity  adjusted successfully.')
