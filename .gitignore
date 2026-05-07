@@ -1,0 +1,79 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test, coverage, and type-check caches
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Local editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local workflow notes
+README_workflow.md
+
+# Local environment and logs
+.env
+.env.*
+*.log
+
+# DTALite working/output folders
+dtalite_run/
+dtalite_l2_run/
+**/Outputs/DTALite/
+regional/
+notebooks/
+
+# Generated scenario period folders
+scenarios/*/am/
+scenarios/*/md/
+scenarios/*/pm/
+scenarios/*/nt/
+regional/*/am/
+regional/*/md/
+regional/*/pm/
+regional/*/nt/
+
+
+# Generated postprocessing/comparison outputs
+scenarios/*_VS_*/
+regional/*_VS_*/
+**/link_performance_combined_processed.csv
+**/diff_*.csv
+**/spd_class_statistics_*.csv
+**/performance_summary*.csv
+**/benchmark_field_comparison.csv
+
+# Generated DTALite run artifacts that may be copied beside inputs
+**/RUN_CARD.md
+**/columns.csv
+**/route_assignment.csv
+**/link_performance.csv
+**/od_performance.csv
+**/summary_log_file.txt
+**/agent.csv
+**/log_main.txt
+**/log_DTA.txt
+**/final_summary.csv

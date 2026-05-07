@@ -1,0 +1,6 @@
+DTALite
+geopandas
+numpy
+openmatrix
+pandas
+shapely
