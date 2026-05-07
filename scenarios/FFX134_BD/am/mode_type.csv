@@ -1,0 +1,7 @@
+mode_type_id,mode_type,name,vot,pce,occ,demand_file
+1,sov,sov,24,1,1,sov_am.csv
+2,hov2,hov2,40,1,2,hov2_am.csv
+3,hov3,hov3,60,1,3.5,hov3_am.csv
+4,com,com,30,1,1,com_am.csv
+5,trk,trk,30,1,1,trk_am.csv
+6,apv,apv,30,1,1.6,apv_am.csv

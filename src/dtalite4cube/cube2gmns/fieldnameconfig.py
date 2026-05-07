@@ -24,13 +24,13 @@ qvdf_params = ("alpha", "beta", "qdf", "plf", "cp", "cd", "n", "s")
 
 qvdf_source_field_template = "QVDF_{qvdf_param}{period_sequence}"
 bpr_vdf_source_field_template = "VDF_{vdf_param}{period_sequence}"
-new_vdf_output_field_template = "VDF_{vdf_param}"
+new_vdf_output_field_template = "vdf_{vdf_param}"
 
 new_allowed_uses_field = "allowed_uses"
-new_fftt_field = "VDF_fftt"
-new_alpha_field = "VDF_alpha"
-new_beta_field = "VDF_beta"
-new_plf_field = "VDF_plf"
+new_fftt_field = "vdf_fftt"
+new_alpha_field = "vdf_alpha"
+new_beta_field = "vdf_beta"
+new_plf_field = "vdf_plf"
 new_toll_field = "toll"
 new_ref_volume_field = "ref_volume"
 new_ref_cost_field = "ref_cost"
@@ -99,12 +99,12 @@ dtalite_base_link_mapping = {
     'toll': new_toll_field,
     'link_type': 'link_type',
     'allowed_uses': new_allowed_uses_field,
-    'VDF_alpha': new_alpha_field,
-    'VDF_beta': new_beta_field,
-    'VDF_plf': new_plf_field,
+    'vdf_alpha': new_alpha_field,
+    'vdf_beta': new_beta_field,
+    'vdf_plf': new_plf_field,
     'ref_volume': new_ref_volume_field,
     'ref_cost': new_ref_cost_field,
-    'VDF_fftt': new_fftt_field,
+    'vdf_fftt': new_fftt_field,
     'geometry': 'geometry',
 }
 dtalite_additional_link_mapping = {

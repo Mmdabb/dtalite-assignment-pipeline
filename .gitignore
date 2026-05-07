@@ -47,7 +47,6 @@ regional/
 notebooks/
 
 # Generated scenario period folders
-scenarios/*/am/
 scenarios/*/md/
 scenarios/*/pm/
 scenarios/*/nt/

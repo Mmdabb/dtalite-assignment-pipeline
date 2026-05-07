@@ -29,8 +29,8 @@ BENCHMARK_HEADERS = {
         "free_speed",
         "capacity",
         "link_type",
-        "VDF_alpha",
-        "VDF_beta",
+        "vdf_alpha",
+        "vdf_beta",
     ],
     "settings.csv": [
         "number_of_iterations",

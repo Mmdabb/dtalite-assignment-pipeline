@@ -15,7 +15,7 @@
     "dtalite_run_mode": "assignment",
     "network_conversion": true,
     "demand_conversion": true,
-    "dtalite_assignment": true
+    "dtalite_assignment": false
   },
   "postprocessing": {
     "enabled": false,
