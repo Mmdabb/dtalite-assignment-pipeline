@@ -1,4 +1,4 @@
-# DTALite4Cube User Guide
+# Pipline User Guide
 
 This repo runs the NVTA DTALite assignment and postprocessing workflow from JSON configuration files. Most runs only require editing a config in `configs/`, then running `main.py` from the repo root.
 
