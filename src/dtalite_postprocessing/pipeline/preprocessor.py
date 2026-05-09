@@ -44,9 +44,18 @@ logger = logging.getLogger(__name__)
 def resolve_period_file(network_dir: str | Path, time_period: str, file_name: str) -> Path:
     network_path = Path(network_dir)
     period_key = time_period.lower()
-    period_path = network_path / period_key / file_name
+    period_dir = network_path / period_key
+    period_path = period_dir / file_name
     if period_path.exists():
         return period_path
+
+    nested_legacy_backmapped_period_path = period_dir / f"{period_key}_origIDs" / file_name
+    if nested_legacy_backmapped_period_path.exists():
+        return nested_legacy_backmapped_period_path
+
+    sibling_legacy_backmapped_period_path = network_path / f"{period_key}_origIDs" / file_name
+    if sibling_legacy_backmapped_period_path.exists():
+        return sibling_legacy_backmapped_period_path
 
     legacy_name = f"{Path(file_name).stem}_{period_key}{Path(file_name).suffix}"
     legacy_path = network_path / legacy_name
@@ -59,7 +68,9 @@ def resolve_period_file(network_dir: str | Path, time_period: str, file_name: st
 
     raise FileNotFoundError(
         f"Missing {file_name} for period {period_key}: checked "
-        f"{period_path}, {legacy_path}, and {legacy_outputs_path}"
+        f"{period_path}, {nested_legacy_backmapped_period_path}, "
+        f"{sibling_legacy_backmapped_period_path}, {legacy_path}, "
+        f"and {legacy_outputs_path}"
     )
 
 

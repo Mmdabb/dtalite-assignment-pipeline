@@ -34,6 +34,8 @@ new_plf_field = "vdf_plf"
 new_toll_field = "toll"
 new_ref_volume_field = "ref_volume"
 new_ref_cost_field = "ref_cost"
+new_vdf_free_speed_mph_field = "vdf_free_speed_mph"
+new_vdf_length_mi_field = "vdf_length_mi"
 
 length_mile_internal_field = "length_in_mile"
 district_id_field = "district_id"
@@ -104,6 +106,8 @@ dtalite_base_link_mapping = {
     'vdf_plf': new_plf_field,
     'ref_volume': new_ref_volume_field,
     'ref_cost': new_ref_cost_field,
+    'vdf_free_speed_mph': new_vdf_free_speed_mph_field,
+    'vdf_length_mi': new_vdf_length_mi_field,
     'vdf_fftt': new_fftt_field,
     'geometry': 'geometry',
 }

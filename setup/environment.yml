@@ -1,0 +1,16 @@
+name: dtalite_pipeline
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pandas
+  - numpy
+  - geopandas
+  - shapely
+  - fiona
+  - pyproj
+  - tqdm
+  - pip
+  - pip:
+      - openmatrix
+      - DTALite

@@ -67,7 +67,7 @@ def run_assignment_from_config(
     scenario_paths: list[str],
     shared_assignment: dict[str, Any],
     scenario_overrides_map: dict[str, Any],
-) -> None:
+) -> bool:
     if not scenario_paths:
         raise ValueError(
             "Config must contain a non-empty 'scenario_paths' or 'scenario_names' list."
@@ -75,6 +75,7 @@ def run_assignment_from_config(
 
     logger.info("Using scenario base directory: %s", scenario_base_dir)
 
+    dtalite_runs_completed = 0
     for scenario_path in scenario_paths:
         logger.info("Starting assignment for scenario: %s", scenario_path)
 
@@ -86,9 +87,15 @@ def run_assignment_from_config(
             scenario_overrides=overrides,
         )
 
-        run_assignment_pipeline(config)
+        if run_assignment_pipeline(config):
+            dtalite_runs_completed += 1
 
-    logger.info("Finished assignment stage.")
+    if dtalite_runs_completed:
+        logger.info("Finished DTALite assignment stage.")
+    else:
+        logger.info("DTALite assignment is disabled.")
+
+    return bool(dtalite_runs_completed)
 
 
 def run_postprocessing_from_config(

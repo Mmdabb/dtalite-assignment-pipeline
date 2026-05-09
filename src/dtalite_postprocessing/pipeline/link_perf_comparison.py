@@ -25,10 +25,13 @@ from .linkperformance_fieldconfig import (
     district_id_name_mapping,
 )
 from .preprocessor import resolve_period_file
+from .statistics_functions import time_period_duration
 
 
 LEGACY_PERSON_VOLUME_FIELD = "person_volume"
 LEGACY_SPEED_FIELD = "speed"
+DEFAULT_LEGACY_TIME_PERIODS = ["am", "md", "pm", "nt"]
+DEFAULT_LEGACY_PERIOD_TIMES = ["0600_0900", "0900_1500", "1500_1900", "1900_0600"]
 
 
 def _ensure_comparison_aliases(link_performance_df):
@@ -147,9 +150,33 @@ def diff_stats(nb_link_per, nb_link, bd_link_per, bd_link, time_period, period_l
     dif_bd.to_csv(os.path.join(parent_dir, f'diff_{time_period}.csv'), index=False)
 
 
-def district_based_diff(net_dir_bd, net_dir_nb, parent_dir):
+def _normalise_period_lengths(time_periods, period_length_dict):
+    if period_length_dict is None:
+        period_length_dict = time_period_duration(DEFAULT_LEGACY_TIME_PERIODS, DEFAULT_LEGACY_PERIOD_TIMES)
+    return {period.lower(): float(length) for period, length in period_length_dict.items()}
+
+
+def _duration_weighted_speed(link_performance_by_period, period_length_dict):
+    weighted_speed = None
+    total_duration = 0.0
+    for period, link_performance_df in link_performance_by_period.items():
+        duration = period_length_dict.get(period, 0.0)
+        if duration <= 0:
+            continue
+        period_speed = link_performance_df["speed"] * duration
+        weighted_speed = period_speed if weighted_speed is None else weighted_speed + period_speed
+        total_duration += duration
+
+    if weighted_speed is None or total_duration <= 0:
+        raise ValueError("Cannot aggregate daily speed without positive period durations.")
+    return weighted_speed / total_duration
+
+
+def district_based_diff(net_dir_bd, net_dir_nb, parent_dir, time_periods=None, period_length_dict=None):
     case_bd = net_dir_bd.split('\\')[-1]
     case_nb = net_dir_nb.split('\\')[-1]
+    time_periods = [period.lower() for period in (time_periods or DEFAULT_LEGACY_TIME_PERIODS)]
+    period_length_dict = _normalise_period_lengths(time_periods, period_length_dict)
 
     net_list = []
     net_list = [net_dir_bd, net_dir_nb]
@@ -158,23 +185,26 @@ def district_based_diff(net_dir_bd, net_dir_nb, parent_dir):
         case = case_bd if net_dir == net_dir_bd else case_nb
         output = os.path.join(net_dir, f'link_performance_{case}.csv')
         if not os.path.exists(output):
-            link_perf_net_am = pd.read_csv(os.path.join(net_dir, 'link_performance_am.csv'))
-            link_perf_net_md = pd.read_csv(os.path.join(net_dir, 'link_performance_md.csv'))
-            link_perf_net_pm = pd.read_csv(os.path.join(net_dir, 'link_performance_pm.csv'))
-            link_perf_net_nt = pd.read_csv(os.path.join(net_dir, 'link_performance_nt.csv'))
+            link_performance_by_period = {
+                period: pd.read_csv(os.path.join(net_dir, f'link_performance_{period}.csv'))
+                for period in time_periods
+            }
+            base_period = time_periods[0]
+            link_perf_base = link_performance_by_period[base_period]
 
-            link_perf_net = link_perf_net_am[
+            link_perf_net = link_perf_base[
                 ['link_id', 'from_node_id', 'to_node_id', 'speed', 'volume', 'person_volume',
                  'geometry', 'link_type']].copy()
 
-            link_perf_net['speed'] = (3 * link_perf_net_am['speed'] + 6 * link_perf_net_md['speed'] +
-                                      4 * link_perf_net_pm['speed'] + 11 * link_perf_net_nt['speed']) / 24
+            link_perf_net['speed'] = _duration_weighted_speed(link_performance_by_period, period_length_dict)
 
-            link_perf_net['volume'] = (link_perf_net_am['volume'] + link_perf_net_md['volume'] +
-                                       link_perf_net_pm['volume'] + link_perf_net_nt['volume'])
+            link_perf_net['volume'] = sum(
+                link_perf_net_period['volume'] for link_perf_net_period in link_performance_by_period.values()
+            )
 
-            link_perf_net['person_volume'] = (link_perf_net_am['person_volume'] + link_perf_net_md['person_volume'] +
-                                              link_perf_net_pm['person_volume'] + link_perf_net_nt['person_volume'])
+            link_perf_net['person_volume'] = sum(
+                link_perf_net_period['person_volume'] for link_perf_net_period in link_performance_by_period.values()
+            )
 
             link_perf_net.to_csv(os.path.join(net_dir, f'link_performance_{case}.csv'), index=False)
 

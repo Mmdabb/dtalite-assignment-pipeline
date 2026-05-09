@@ -4,7 +4,12 @@ import traceback
 import sys
 import csv
 import numpy as np
-from datetime import datetime, timedelta
+import logging
+from dataclasses import dataclass
+from src.dtalite4cube.settings.generate_dtalite_settings import (
+    normalize_dtalite_period_hours,
+    parse_period_time_hours,
+)
 from .linkperformance_fieldconfig import (
     DISTRICT_ID_FIELD,
     FROM_NODE_ID_FIELD,
@@ -14,6 +19,16 @@ from .linkperformance_fieldconfig import (
     district_id_name_mapping,
 )
 from .preprocessor import link_performance_preprocess
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PeriodDurationDetails:
+    original_duration: float
+    effective_duration: float
+    crosses_midnight: bool
+
 
 def speed_class(speed):
     nb_range = np.floor(speed / 5)
@@ -28,16 +43,58 @@ def speed_class_series(speed_series):
     return lower + "_" + upper
 
 
+def original_period_duration_hours(start_hour: int, end_hour: int) -> float:
+    if end_hour < start_hour:
+        end_hour += 24
+    return float(end_hour - start_hour)
+
+
+def effective_assignment_duration_hours(start_hour: int, end_hour: int) -> tuple[float, float, bool]:
+    normalized_start, normalized_end, crosses_midnight = normalize_dtalite_period_hours(start_hour, end_hour)
+    original_duration = original_period_duration_hours(start_hour, end_hour)
+    effective_duration = float(normalized_end - normalized_start)
+    return original_duration, effective_duration, crosses_midnight
+
+
+def _period_duration_details(period_title: str, time_range: str) -> PeriodDurationDetails:
+    start_hour, end_hour = parse_period_time_hours(time_range)
+    original_duration, effective_duration, crosses_midnight = effective_assignment_duration_hours(
+        start_hour,
+        end_hour,
+    )
+    return PeriodDurationDetails(
+        original_duration=original_duration,
+        effective_duration=effective_duration,
+        crosses_midnight=crosses_midnight,
+    )
+
+
+def time_period_duration_details(time_period_list, period_range_list):
+    if isinstance(time_period_list, str) and isinstance(period_range_list, str):
+        return _period_duration_details(time_period_list, period_range_list)
+
+    duration_details_by_period = {}
+    for period_title, time_range in zip(time_period_list, period_range_list):
+        duration_details_by_period[period_title] = _period_duration_details(period_title, time_range)
+    return duration_details_by_period
+
+
 def time_period_duration(time_period_list, period_range_list):
     time_period_duration_dict = {}
-    for period_title, time_range in zip(time_period_list, period_range_list):
-        start_time_str, end_time_str = time_range.split('_')
-        start_time =  datetime.strptime(start_time_str, '%H%M')
-        end_time = datetime.strptime(end_time_str, '%H%M')
-        time_duration = end_time - start_time
-        if time_duration.days < 0:
-            time_duration = time_duration + timedelta(days=1)
-        time_period_duration_dict[period_title] = time_duration.total_seconds() / 3600
+    details = time_period_duration_details(time_period_list, period_range_list)
+    for period_title, duration_info in details.items():
+        original_duration = duration_info.original_duration
+        effective_duration = duration_info.effective_duration
+        if duration_info.crosses_midnight:
+            logger.warning(
+                "Postprocessing period %s uses truncated effective duration %.2f hours "
+                "instead of original configured duration %.2f hours because DTALite "
+                "assignment was truncated at midnight.",
+                period_title,
+                effective_duration,
+                original_duration,
+            )
+        time_period_duration_dict[period_title] = effective_duration
     return time_period_duration_dict
 
 
@@ -636,7 +693,7 @@ def performance_summary(link_performance_combined, network_dir, time_duration_di
 
     try:
         overall_agg['severe_congestion_max'] = np.max(
-            agg_by_time[(severe_congestion_field_name, 'max')]
+            agg_by_time['severe_congestion_max']
         )
     except KeyError as e:
         print(f"KeyError: Column not found: {e}")
@@ -649,7 +706,7 @@ def performance_summary(link_performance_combined, network_dir, time_duration_di
 
     try:
         overall_agg['severe_congestion_mean'] = np.mean(
-            agg_by_time[(severe_congestion_field_name, 'mean')]
+            agg_by_time['severe_congestion_mean']
         )
     except KeyError as e:
         print(f"KeyError: Column not found: {e}")
@@ -759,4 +816,3 @@ def performance_summary(link_performance_combined, network_dir, time_duration_di
     statistics_data.to_csv(statistics_data_dir, index=False, float_format="%.2f")
     print(f"Performance statistics saved to: {statistics_data_dir}")
     print('============================================================================================================')
-

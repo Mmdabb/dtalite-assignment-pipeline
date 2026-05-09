@@ -4,13 +4,24 @@ import argparse
 import csv
 import logging
 import shutil
+import time
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Iterable
 
+from .backmap_outputs import BackmapResult
+from .backmap_outputs import backmap_dtalite_outputs as backmap_outputs_to_original_ids
 from .cube2gmns import get_gmns_from_cube
 from .omx2csv import get_gmns_demand_from_omx
+from .internal_config import BACKMAP_DTALITE_OUTPUTS
+from .internal_config import KEEP_SEQUENTIAL_WORK_DIR
+from .internal_config import RENUMBER_LINK_IDS_IF_NEEDED
+from .internal_config import RUN_GMNS_READINESS_CHECK
+from .internal_config import USE_SEQUENTIAL_IDS_FOR_DTALITE
+from .internal_config import WRITE_ASSIGNMENT_SUMMARY
+from .readiness_check import ReadinessResult
+from .readiness_check import run_gmns_readiness_check as run_period_readiness_check
 from .reproducible_run import (
     parse_convergence,
     preflight,
@@ -19,8 +30,10 @@ from .reproducible_run import (
     verify_outputs,
     write_run_card,
 )
+from .renumbering import RenumberResult, renumber_period_folder
 from .settings.dtalite_settings_config import SUPPORTED_MODE_TYPES, demand_file_name
 from .settings.generate_dtalite_settings import (
+    configure_time_period_hours,
     generate_dtalite_input_files,
     normalize_period_key,
 )
@@ -40,6 +53,14 @@ LEGACY_ASSIGNMENT_KEYS = {
     "settings_overrides",
     "simu",
     "speed",
+}
+
+INTERNAL_ASSIGNMENT_KEYS = {
+    "use_sequential_ids_for_dtalite",
+    "renumber_link_ids_if_needed",
+    "run_gmns_readiness_check",
+    "backmap_dtalite_outputs",
+    "write_assignment_summary",
 }
 
 
@@ -64,9 +85,10 @@ class AssignmentConfig:
     iterations: int = 10
     processors: int = 8
     route_output: int = 0
+    vehicle_output: int = 0
     period_start: int = 7
     period_end: int = 8
-    unit_system: str = "imperial"
+    unit_system: str = "metric"
     vdf_type: str = "bpr"
     label: str | None = None
     inplace: bool = True
@@ -75,6 +97,11 @@ class AssignmentConfig:
     scenario_input_dir: Path | None = None
     demand_dir: Path | None = None
     write_legacy_outputs: bool = False
+    use_sequential_ids_for_dtalite: bool = field(default=USE_SEQUENTIAL_IDS_FOR_DTALITE, init=False)
+    renumber_link_ids_if_needed: bool = field(default=RENUMBER_LINK_IDS_IF_NEEDED, init=False)
+    run_gmns_readiness_check: bool = field(default=RUN_GMNS_READINESS_CHECK, init=False)
+    backmap_dtalite_outputs: bool = field(default=BACKMAP_DTALITE_OUTPUTS, init=False)
+    write_assignment_summary: bool = field(default=WRITE_ASSIGNMENT_SUMMARY, init=False)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AssignmentConfig":
@@ -100,6 +127,14 @@ class AssignmentConfig:
                 logger.warning("Ignoring legacy assignment config key: %s", legacy_key)
                 parsed.pop(legacy_key, None)
 
+        for internal_key in INTERNAL_ASSIGNMENT_KEYS:
+            if internal_key in parsed:
+                logger.warning(
+                    "Ignoring internal assignment config key: %s; controlled by src/dtalite4cube/internal_config.py",
+                    internal_key,
+                )
+                parsed.pop(internal_key, None)
+
         known_fields = {field.name for field in dataclass_fields(cls)}
         unknown_keys = sorted(set(parsed) - known_fields)
         if unknown_keys:
@@ -124,10 +159,13 @@ class AssignmentConfig:
             raise NotImplementedError("dtalite_run_mode='simulation' is reserved but not implemented in this workflow.")
 
         if self.unit_system not in {"imperial", "metric"}:
-            raise ValueError("unit_system must be either 'imperial' for mile/mph or 'metric' for meter/kph.")
+            raise ValueError("unit_system must be either 'imperial' for mile/mph or 'metric' for km/kph.")
 
         if self.route_output not in {0, 1}:
             raise ValueError("route_output must be 0 or 1.")
+
+        if self.vehicle_output not in {0, 1}:
+            raise ValueError("vehicle_output must be 0 or 1.")
 
         if self.vdf_type not in {"bpr", "qvdf"}:
             raise ValueError("vdf_type must be either 'bpr' or 'qvdf'.")
@@ -144,7 +182,7 @@ class AssignmentConfig:
 
     @property
     def length_unit(self) -> str:
-        return "mile" if self.unit_system == "imperial" else "meter"
+        return "mile" if self.unit_system == "imperial" else "km"
 
     @property
     def speed_unit(self) -> str:
@@ -369,6 +407,7 @@ def run_reproducible_dtalite(
         iterations=config.iterations,
         processors=config.processors,
         route_output=config.route_output,
+        vehicle_output=config.vehicle_output,
         period_start=config.period_start,
         period_end=config.period_end,
         metric_system=config.metric_system,
@@ -385,6 +424,7 @@ def run_reproducible_dtalite(
         "iterations": config.iterations,
         "processors": config.processors,
         "route_output": config.route_output,
+        "vehicle_output": config.vehicle_output,
         "period_start": config.period_start,
         "period_end": config.period_end,
         "unit_system": config.unit_system,
@@ -422,6 +462,220 @@ def run_reproducible_dtalite(
     return run_folder
 
 
+def run_sequential_dtalite_assignment(
+    *,
+    config: AssignmentConfig,
+    source_network_path: Path,
+    label: str,
+    time_period: str,
+    readiness_result: ReadinessResult | None = None,
+) -> Path:
+    logger.info("Starting sequential-ID DTALite run: source=%s", source_network_path)
+    renumber_result: RenumberResult | None = None
+    backmap_result: BackmapResult | None = None
+    convergence: dict[str, object] = {}
+    verify_info: dict[str, object] = {}
+    elapsed = 0.0
+    dtalite_log_path = source_network_path / f"{source_network_path.name}_seq" / "dtalite_run.log"
+    dtalite_log_text = ""
+    run_status = "not_started"
+    summary_written = False
+
+    try:
+        renumber_result = renumber_period_folder(
+            source_network_path,
+            renumber_link_ids_if_needed=config.renumber_link_ids_if_needed,
+        )
+        logger.info("sequential renumbering complete: %s", renumber_result.sequential_dir)
+
+        preflight_info = preflight(renumber_result.sequential_dir)
+        if config.dry_run:
+            run_status = "dry_run"
+            logger.info("DTALite dry_run=True; sequential preflight passed and execution is skipped.")
+            return renumber_result.sequential_dir
+
+        stage_inputs(
+            renumber_result.sequential_dir,
+            renumber_result.sequential_dir,
+            iterations=config.iterations,
+            processors=config.processors,
+            route_output=config.route_output,
+            vehicle_output=config.vehicle_output,
+            period_start=config.period_start,
+            period_end=config.period_end,
+            metric_system=config.metric_system,
+        )
+        elapsed, dtalite_log_text = run_dtalite(renumber_result.sequential_dir)
+        dtalite_log_path = renumber_result.sequential_dir / "dtalite_run.log"
+        verify_info = verify_outputs(renumber_result.sequential_dir, route_output=0)
+        convergence = parse_convergence(dtalite_log_text, renumber_result.sequential_dir)
+
+        route_assignment = renumber_result.sequential_dir / "route_assignment.csv"
+        if (
+            config.route_output
+            and not config.no_rename_columns
+            and route_assignment.exists()
+            and route_assignment.stat().st_size > 0
+        ):
+            copy_route_assignment_to_columns(renumber_result.sequential_dir)
+
+        args_used = {
+            "iterations": config.iterations,
+            "processors": config.processors,
+            "route_output": config.route_output,
+            "vehicle_output": config.vehicle_output,
+            "period_start": config.period_start,
+            "period_end": config.period_end,
+            "unit_system": config.unit_system,
+            "use_sequential_ids_for_dtalite": config.use_sequential_ids_for_dtalite,
+        }
+        write_run_card(
+            renumber_result.sequential_dir,
+            source_network_path,
+            label,
+            preflight_info,
+            elapsed,
+            convergence,
+            verify_info,
+            args_used,
+        )
+        run_status = "success"
+        logger.info("DTALite assignment complete")
+
+        if config.backmap_dtalite_outputs:
+            backmap_result = backmap_outputs_to_original_ids(
+                renumber_result.sequential_dir,
+                source_network_path,
+                mapping_path=renumber_result.mapping_path,
+                link_ids_renumbered=renumber_result.stats.link_ids_renumbered,
+            )
+            logger.info("backmap complete: %s", backmap_result.output_dir)
+            output_dir = backmap_result.output_dir
+        else:
+            output_dir = renumber_result.sequential_dir
+
+        if time_period is not None and config.write_legacy_outputs:
+            output_files = [
+                *config.output_files,
+                "od_performance.csv",
+                "dtalite_run.log",
+                "summary_log_file.txt",
+                "RUN_CARD.md",
+            ]
+            if config.route_output:
+                output_files.extend(["route_assignment.csv", "columns.csv"])
+            save_period_outputs(
+                network_path=config.network_path,
+                source_dir=output_dir,
+                time_period=time_period,
+                output_files=output_files,
+                extra_files=[],
+            )
+
+        return output_dir
+    except Exception as exc:
+        run_status = f"failed: {exc}"
+        raise
+    finally:
+        if config.write_assignment_summary and renumber_result is not None:
+            summary_dir = source_network_path if backmap_result is not None else renumber_result.sequential_dir
+            _write_assignment_summary(
+                summary_dir / "RUN_SUMMARY.md",
+                config=config,
+                time_period=time_period,
+                renumber_result=renumber_result,
+                run_status=run_status,
+                convergence=convergence,
+                dtalite_log=dtalite_log_path,
+                readiness_result=readiness_result,
+                backmap_result=backmap_result,
+            )
+            logger.info("summary written: %s", summary_dir / "RUN_SUMMARY.md")
+            summary_written = True
+        if run_status == "success" and summary_written and renumber_result is not None and backmap_result is not None:
+            _cleanup_sequential_work_dir(renumber_result.sequential_dir)
+
+
+def _write_assignment_summary(
+    path: Path,
+    *,
+    config: AssignmentConfig,
+    time_period: str,
+    renumber_result: RenumberResult,
+    run_status: str,
+    convergence: dict[str, object],
+    dtalite_log: Path,
+    readiness_result: ReadinessResult | None,
+    backmap_result: BackmapResult | None,
+) -> None:
+    stats = renumber_result.stats
+    missing_optional = backmap_result.missing_optional_files if backmap_result else []
+    empty_optional = backmap_result.empty_optional_files if backmap_result else []
+    readiness_log = readiness_result.log_path if readiness_result else None
+    convergence_lines = [f"  - {key}: {value}" for key, value in convergence.items()] or ["  - not available"]
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "# DTALite Assignment Summary",
+                "",
+                f"- Scenario: {config.scenario_name or config.network_path.name}",
+                f"- Period: {time_period}",
+                f"- Original node count: {stats.original_node_count}",
+                f"- Original max node ID: {stats.original_max_node_id}",
+                f"- Sequential node count: {stats.sequential_node_count}",
+                f"- Sequential max node ID: {stats.sequential_max_node_id}",
+                f"- Original zone count: {stats.original_zone_count}",
+                f"- Original max zone ID: {stats.original_max_zone_id}",
+                f"- Sequential zone count: {stats.sequential_zone_count}",
+                f"- Sequential max zone ID: {stats.sequential_max_zone_id}",
+                f"- Original link count: {stats.original_link_count}",
+                f"- Original max link ID: {stats.original_max_link_id}",
+                f"- Sequential link count: {stats.sequential_link_count}",
+                f"- Sequential max link ID: {stats.sequential_max_link_id}",
+                f"- Link IDs renumbered: {stats.link_ids_renumbered}",
+                f"- DTALite run status: {run_status}",
+                f"- Missing optional files: {', '.join(missing_optional) if missing_optional else 'none'}",
+                f"- Empty optional files: {', '.join(empty_optional) if empty_optional else 'none'}",
+                f"- Full DTALite log: {dtalite_log}",
+                f"- GMNS readiness log: {readiness_log if readiness_log else 'not run'}",
+                "",
+                "## Convergence",
+                *convergence_lines,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def _cleanup_sequential_work_dir(seq_dir: Path) -> None:
+    if KEEP_SEQUENTIAL_WORK_DIR:
+        logger.warning(
+            "Keeping internal sequential work folder because DTALITE_KEEP_SEQ_DIR is enabled: %s",
+            seq_dir,
+        )
+        return
+
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            shutil.rmtree(seq_dir)
+            logger.info("Removed internal sequential work folder: %s", seq_dir)
+            return
+        except Exception as exc:
+            last_error = exc
+            if attempt < 3:
+                time.sleep(0.5)
+
+    logger.warning(
+        "Could not remove internal sequential work folder %s: %s",
+        seq_dir,
+        last_error,
+    )
+
+
 def save_period_outputs(
     *,
     network_path: Path,
@@ -457,14 +711,19 @@ def save_period_outputs(
         logger.info("Saved %s", target_path)
 
 
-def run_assignment_pipeline(config: AssignmentConfig) -> None:
+def run_assignment_pipeline(config: AssignmentConfig) -> bool:
     config.validate()
+    configure_time_period_hours(config.active_time_periods, config.period_times)
     # logger.info("Running assignment pipeline for: %s", config.network_path)
     logger.info(
         "Running assignment pipeline for scenario=%s path=%s",
         config.scenario_name or "<unnamed>",
         config.network_path,
     )
+    if KEEP_SEQUENTIAL_WORK_DIR:
+        logger.warning(
+            "DEBUG MODE ENABLED: DTALITE_KEEP_SEQ_DIR=1. Internal <period>_seq folders will be preserved."
+        )
 
     if config.network_conversion:
         run_network_conversion(config)
@@ -483,13 +742,33 @@ def run_assignment_pipeline(config: AssignmentConfig) -> None:
             "number_of_iterations": config.iterations,
             "number_of_processors": config.processors,
             "route_output": config.route_output,
+            "vehicle_output": config.vehicle_output,
         },
     )
     remove_root_period_duplicates(scenario_output_dir, config.active_time_periods)
+    logger.info("conversion complete")
 
-    if config.dtalite_assignment:
+    readiness_results: dict[str, ReadinessResult] = {}
+    if config.run_gmns_readiness_check:
         for time_period, period_source in prepared_period_folders.items():
-            period_label = f"{config.label or config.scenario_name or 'scenario'}_{time_period}"
+            readiness_results[time_period] = run_period_readiness_check(period_source)
+        logger.info("readiness check complete")
+
+    if not config.dtalite_assignment:
+        logger.info("DTALite assignment is disabled for: %s", config.network_path)
+        return False
+
+    for time_period, period_source in prepared_period_folders.items():
+        period_label = f"{config.label or config.scenario_name or 'scenario'}_{time_period}"
+        if config.use_sequential_ids_for_dtalite:
+            run_sequential_dtalite_assignment(
+                config=config,
+                source_network_path=period_source,
+                label=period_label,
+                time_period=time_period,
+                readiness_result=readiness_results.get(time_period),
+            )
+        else:
             run_reproducible_dtalite(
                 config=config,
                 source_network_path=period_source,
@@ -498,7 +777,8 @@ def run_assignment_pipeline(config: AssignmentConfig) -> None:
                 time_period=time_period,
             )
 
-    logger.info("Finished assignment pipeline for: %s", config.network_path)
+    logger.info("Finished DTALite assignment pipeline for: %s", config.network_path)
+    return True
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -515,9 +795,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--iterations", type=int, default=10)
     parser.add_argument("--processors", type=int, default=8)
     parser.add_argument("--route-output", type=int, choices=[0, 1], default=0)
+    parser.add_argument("--vehicle-output", type=int, choices=[0, 1], default=0)
     parser.add_argument("--period-start", type=int, default=7)
     parser.add_argument("--period-end", type=int, default=8)
-    parser.add_argument("--unit-system", choices=["imperial", "metric"], default="imperial")
+    parser.add_argument("--unit-system", choices=["imperial", "metric"], default="metric")
     parser.add_argument("--metric-system", type=int, choices=[0, 1], help="Legacy alias: 1=imperial, 0=metric.")
     parser.add_argument("--vdf-type", choices=["bpr", "qvdf"], default="bpr")
     parser.add_argument("--label")
@@ -528,7 +809,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--isolated-work-dir", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-rename-columns", action="store_true")
-
     parser.add_argument("--time-periods", nargs="+", default=["am", "md", "pm", "nt"])
     parser.add_argument(
         "--period-times",
@@ -563,6 +843,7 @@ def main() -> None:
         iterations=args.iterations,
         processors=args.processors,
         route_output=args.route_output,
+        vehicle_output=args.vehicle_output,
         period_start=args.period_start,
         period_end=args.period_end,
         unit_system=args.unit_system if args.metric_system is None else ("imperial" if args.metric_system == 1 else "metric"),

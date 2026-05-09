@@ -1,6 +1,9 @@
 DTALite
 geopandas
+fiona
 numpy
 openmatrix
 pandas
+pyproj
 shapely
+tqdm

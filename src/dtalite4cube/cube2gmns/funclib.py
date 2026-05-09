@@ -26,6 +26,8 @@ from .fieldnameconfig import (
     new_ref_cost_field,
     new_ref_volume_field,
     new_toll_field,
+    new_vdf_free_speed_mph_field,
+    new_vdf_length_mi_field,
     node_id_field,
     node_file_name,
     pair_field,
@@ -235,8 +237,8 @@ def _loadLinks(
     time_period,
     time_period_list,
     vdf_dict,
-    length_unit='mile',
-    speed_unit='mph',
+    length_unit='km',
+    speed_unit='kph',
     vdf_type='bpr',
 ):
 
@@ -327,16 +329,18 @@ def _loadLinks(
             print(f'WARNING: to_node {to_node_id} of link {link.link_id} does not exist in the node file')
             continue
 
-        # Compute link length in meters and mile
+        # Compute link length in the requested output unit and keep VDF inputs in imperial units.
         cube_distance_field = cube_field_mapping.distance_field
         length_in_mile = network_shapefile[cube_distance_field][index]
 
-        if length_unit == 'meter':
+        if length_unit == 'km':
+            length = length_in_mile * 1.60934
+        elif length_unit == 'meter':
             length = length_in_mile * 1609.34
         elif length_unit == 'mile':
             length = length_in_mile
         else:
-            sys.exit(f'ERROR: Invalid length unit ({length_unit}). It must be either "meter" or "mile".')
+            sys.exit(f'ERROR: Invalid length unit ({length_unit}). It must be "mile", "km", or "meter".')
 
         try:
             link.length = float(length)
@@ -349,6 +353,8 @@ def _loadLinks(
             link.other_attrs[length_mile_internal_field] = float(length_in_mile)
         except ValueError:
             link.other_attrs[length_mile_internal_field] = 0
+
+        link.other_attrs[new_vdf_length_mi_field] = link.other_attrs[length_mile_internal_field]
 
         cube_lane_field = cube_timedep_field_mapping.get_field('lane_field', time_period.upper())
         try:
@@ -439,12 +445,14 @@ def _loadLinks(
                 f'exist in the defined capacity classes. Skipping this link.')
             continue
 
+        link.other_attrs[new_vdf_free_speed_mph_field] = int(free_speed)
+
         if speed_unit == 'kph':
             link.free_speed = int(free_speed) * 1.60934
         elif speed_unit == 'mph':
             link.free_speed = int(free_speed)
         else:
-            sys.exit(f'ERROR: Invalid length unit ({length_unit}). It must be either "meter" or "mile".')
+            sys.exit(f'ERROR: Invalid speed unit ({speed_unit}). It must be either "mph" or "kph".')
 
         vdf_fields = bpr_vdf_params if vdf_type == 'bpr' else qvdf_params
         link_type_vdf_key = str(link_type)
@@ -526,7 +534,7 @@ def _buildnet(
     time_period_list,
     length_unit,
     node_generation,
-    speed_unit='mph',
+    speed_unit='kph',
     vdf_type='bpr',
 ):
     network = Network()
@@ -730,8 +738,8 @@ def cap_adjustment(net_dir, time_period, link_filename=None):
 def get_gmns_from_cube(
     shapefile_path,
     time_period_list,
-    length_unit='mile',
-    speed_unit='mph',
+    length_unit='km',
+    speed_unit='kph',
     district_id_assignment=True,
     capacity_adjustment=False,
     vdf_type='bpr',

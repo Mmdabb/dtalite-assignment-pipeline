@@ -66,6 +66,28 @@ def resolve_period_output_dirs(scenario_dir: Path, time_periods: list[str]) -> d
             period_dirs[period_key] = period_dir
             continue
 
+        nested_legacy_backmapped_period_dir = period_dir / f"{period_key}_origIDs"
+        if (
+            (nested_legacy_backmapped_period_dir / LINK_PERFORMANCE_FILENAME).exists()
+            and (
+                (nested_legacy_backmapped_period_dir / LINK_FILENAME).exists()
+                or (period_dir / LINK_FILENAME).exists()
+            )
+        ):
+            period_dirs[period_key] = nested_legacy_backmapped_period_dir
+            continue
+
+        sibling_legacy_backmapped_period_dir = scenario_dir / f"{period_key}_origIDs"
+        if (
+            (sibling_legacy_backmapped_period_dir / LINK_PERFORMANCE_FILENAME).exists()
+            and (
+                (sibling_legacy_backmapped_period_dir / LINK_FILENAME).exists()
+                or (period_dir / LINK_FILENAME).exists()
+            )
+        ):
+            period_dirs[period_key] = sibling_legacy_backmapped_period_dir
+            continue
+
         legacy_dir = scenario_dir / "Outputs" / "DTALite"
         legacy_lp = legacy_dir / f"link_performance_{period_key}.csv"
         legacy_link = legacy_dir / f"link_{period_key}.csv"

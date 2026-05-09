@@ -31,22 +31,29 @@ htmlcov/
 Thumbs.db
 desktop.ini
 
-# Local workflow notes
-README_workflow.md
-
 # Local environment and logs
 .env
 .env.*
 *.log
+logs/
+
+# Local installers and office temp files
+setup/Miniconda3-latest-Windows-x86_64.exe
+~$*
 
 # DTALite working/output folders
 dtalite_run/
 dtalite_l2_run/
+**/*_seq/
 **/Outputs/DTALite/
 regional/
 notebooks/
+development/
+codex_tmp*/
+**/codex_*/
 
 # Generated scenario period folders
+scenarios/*/am/
 scenarios/*/md/
 scenarios/*/pm/
 scenarios/*/nt/
@@ -67,12 +74,30 @@ regional/*_VS_*/
 
 # Generated DTALite run artifacts that may be copied beside inputs
 **/RUN_CARD.md
+**/RUN_SUMMARY.md
+**/dtalite_run.log
+**/gmns_readiness.log
+**/gmns_readiness_summary.md
+**/validation_report.txt
+**/zone_connector_report.csv
+**/id_mapping.csv
 **/columns.csv
 **/route_assignment.csv
 **/link_performance.csv
 **/od_performance.csv
+**/origin_accessibility.csv
+**/destination_accessibility.csv
+**/inaccessible_od.csv
+**/google_maps_od_distance.csv
 **/summary_log_file.txt
 **/agent.csv
 **/log_main.txt
 **/log_DTA.txt
 **/final_summary.csv
+**/statistics_data.csv
+
+# Notebook and local cache folders
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+.conda/
+conda-meta/

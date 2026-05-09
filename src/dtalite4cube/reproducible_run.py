@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from .settings.generate_dtalite_settings import normalize_dtalite_period_hours
+except ImportError:
+    from settings.generate_dtalite_settings import normalize_dtalite_period_hours
+
 logger = logging.getLogger(__name__)
 
 REQUIRED_INPUTS = ("node.csv", "link.csv", "settings.csv", "mode_type.csv")
@@ -71,6 +76,12 @@ def fmt_size(n_bytes: int) -> str:
     if n_bytes < 1024**3:
         return f"{n_bytes / 1024**2:.2f} MB"
     return f"{n_bytes / 1024**3:.2f} GB"
+
+
+def fmt_count(value: Any) -> str:
+    if isinstance(value, int):
+        return f"{value:,}"
+    return str(value)
 
 
 def _read_header(path: Path) -> list[str]:
@@ -166,6 +177,7 @@ def stage_inputs(
     iterations: int,
     processors: int,
     route_output: int,
+    vehicle_output: int,
     period_start: int,
     period_end: int,
     metric_system: int,
@@ -191,33 +203,75 @@ def stage_inputs(
             logger.info("Staged %s to %s (%s)", source.name, work_dir, fmt_size(target.stat().st_size))
 
     settings_path = work_dir / "settings.csv"
-    normalized_settings = _normalize_settings_rows(settings_path, route_output)
+    normalized_settings = _normalize_settings_rows(settings_path, route_output, vehicle_output)
     if normalized_settings is not None:
         with settings_path.open("w", newline="", encoding="utf-8") as f:
             csv.writer(f).writerows(normalized_settings)
-        logger.info("Set route_output=%s in %s", route_output, settings_path)
+        logger.info(
+            "Set route_output=%s and vehicle_output=%s in %s",
+            route_output,
+            vehicle_output,
+            settings_path,
+        )
     else:
         settings_path.write_text(
-            _default_settings_csv(iterations, processors, route_output, period_start, period_end, metric_system),
+            _default_settings_csv(
+                iterations,
+                processors,
+                route_output,
+                vehicle_output,
+                period_start,
+                period_end,
+                metric_system,
+            ),
             encoding="utf-8",
         )
-        logger.info("Wrote default settings.csv with route_output=%s in %s", route_output, settings_path)
+        logger.info(
+            "Wrote default settings.csv with route_output=%s and vehicle_output=%s in %s",
+            route_output,
+            vehicle_output,
+            settings_path,
+        )
 
     return work_dir
 
 
-def _normalize_settings_rows(settings_path: Path, route_output: int) -> list[list[str]] | None:
+def _normalize_settings_rows(settings_path: Path, route_output: int, vehicle_output: int) -> list[list[str]] | None:
     with settings_path.open("r", newline="", encoding="utf-8", errors="replace") as f:
         rows = list(csv.reader(f))
 
-    if len(rows) < 2 or "route_output" not in rows[0]:
+    required_columns = {
+        "route_output",
+        "vehicle_output",
+        "demand_period_starting_hours",
+        "demand_period_ending_hours",
+    }
+    if len(rows) < 2 or not required_columns.issubset(rows[0]):
         return None
 
     route_output_index = rows[0].index("route_output")
+    vehicle_output_index = rows[0].index("vehicle_output")
+    period_start_index = rows[0].index("demand_period_starting_hours")
+    period_end_index = rows[0].index("demand_period_ending_hours")
     for row in rows[1:]:
-        while len(row) <= route_output_index:
+        while len(row) <= max(route_output_index, vehicle_output_index, period_start_index, period_end_index):
             row.append("")
         row[route_output_index] = str(route_output)
+        row[vehicle_output_index] = str(vehicle_output)
+        start_hour = int(float(row[period_start_index]))
+        end_hour = int(float(row[period_end_index]))
+        normalized_start, normalized_end, crosses_midnight = normalize_dtalite_period_hours(start_hour, end_hour)
+        if crosses_midnight:
+            logger.warning(
+                "DTALite settings period crosses midnight (%s -> %s). "
+                "DTALite settings will temporarily use %s -> 24 only. "
+                "The post-midnight portion is not assigned in this run.",
+                start_hour,
+                end_hour,
+                start_hour,
+            )
+        row[period_start_index] = str(normalized_start)
+        row[period_end_index] = str(normalized_end)
     return rows
 
 
@@ -225,14 +279,25 @@ def _default_settings_csv(
     iterations: int,
     processors: int,
     route_output: int,
+    vehicle_output: int,
     period_start: int,
     period_end: int,
     metric_system: int,
 ) -> str:
     _ = metric_system
+    normalized_start, normalized_end, crosses_midnight = normalize_dtalite_period_hours(period_start, period_end)
+    if crosses_midnight:
+        logger.warning(
+            "DTALite settings period crosses midnight (%s -> %s). "
+            "DTALite settings will temporarily use %s -> 24 only. "
+            "The post-midnight portion is not assigned in this run.",
+            period_start,
+            period_end,
+            period_start,
+        )
     return (
         f"{DEFAULT_SETTINGS_HEADER}\n"
-        f"{iterations},{processors},{period_start},{period_end},-1,0,{route_output},0,0,0,0\n"
+        f"{iterations},{processors},{normalized_start},{normalized_end},-1,0,{route_output},{vehicle_output},0,0,0\n"
     )
 
 
@@ -473,8 +538,8 @@ def write_run_card(
     columns = verify_info.get("columns", {})
     add("## Route Assignment Summary")
     add("")
-    add(f"- Route assignment rows: `{columns.get('rows', '?'):,}`")
-    add(f"- Unique OD pairs: `{columns.get('unique_od_pairs', '?'):,}`")
+    add(f"- Route assignment rows: `{fmt_count(columns.get('rows', '?'))}`")
+    add(f"- Unique OD pairs: `{fmt_count(columns.get('unique_od_pairs', '?'))}`")
     add("")
 
     add("## Reproduction Command")
